@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3/pkg/media"
+	"github.com/pion/webrtc/v3/pkg/media/oggreader"
 	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
 )
 
@@ -30,7 +33,7 @@ func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	}
 }
 
-func handleVoice(c chan *discordgo.Packet) {
+func handleVoice(c chan *discordgo.Packet, wg *sync.WaitGroup) {
 	files := make(map[uint32]media.Writer)
 	for p := range c {
 		file, ok := files[p.SSRC]
@@ -54,7 +57,28 @@ func handleVoice(c chan *discordgo.Packet) {
 	// Once we made it here, we're done listening for packets. Close all files
 	for _, f := range files {
 		f.Close()
+	}	
+	wg.Done()
+}
+
+func repeatVoice(c chan []byte, wg *sync.WaitGroup) {
+	// open the file based on p.SSRC, "p.SSRC".ogg
+	file, _ := os.Open("593398.ogg")
+	reader, header, err := oggreader.NewWith(file)
+	if err != nil {
+		fmt.Println("can't read ogg:", err)
+		return
 	}
+
+	// send to c
+	buffer, page_header, err := reader.ParseNextPage();
+	for err == nil {
+		buffer, page_header, err = reader.ParseNextPage()
+		c <- buffer
+		fmt.Println(header, page_header)
+	}
+	close(c)
+	wg.Done()
 }
 
 func main() {
@@ -82,12 +106,27 @@ func main() {
 		return
 	}
 
+	wg := sync.WaitGroup{}
+	// timeout: close listener after X secs
 	go func() {
-		time.Sleep(10 * time.Second)
+		time.Sleep(3 * time.Second)
+		fmt.Println("closed receiver")
+
+		// make bot 'playback' spoken stuff to channel
+		wg.Add(1)
+		v.Speaking(true)
+		go repeatVoice(v.OpusSend, &wg)
+		fmt.Println("sending")
+		time.Sleep(3 * time.Second)
+		v.Speaking(false)
+
 		close(v.OpusRecv)
 		v.Close()
+		fmt.Println("closed all")
 	}()
-
-	handleVoice(v.OpusRecv)
-
+	wg.Add(1)
+	handleVoice(v.OpusRecv, &wg)
+	fmt.Println("receiving")
+	wg.Wait()
+	fmt.Println("done waiting")
 }
