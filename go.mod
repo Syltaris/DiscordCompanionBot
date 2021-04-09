@@ -9,6 +9,7 @@ require (
 	github.com/go-audio/audio v1.0.0 // indirect
 	github.com/go-audio/wav v1.0.0 // indirect
 	github.com/joho/godotenv v1.3.0 // indirect
+	github.com/nicolaifsf/go-speak v0.0.0-20171126142808-4e8e88231e92 // indirect
 	github.com/pion/rtp v1.6.2 // indirect
 	github.com/pion/webrtc/v3 v3.0.20 // indirect
 	github.com/sethgrid/gencurl v0.0.0-20161025011400-a3af93c1aba4 // indirect

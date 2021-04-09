@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -32,6 +34,8 @@ var witAiClient *witai.Client
 var guildId = "829599334127501312"
 var channelId = "829599334127501316"
 
+var witAiToken = ""
+var botToken = ""
 
 func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	return &rtp.Packet{
@@ -189,64 +193,177 @@ func PlayAudioFile(v *discordgo.VoiceConnection, filename string, stop <-chan bo
 	}
 }
 
+// with correct text
+type MessageResponse struct {
+	ID       string                 `json:"msg_id"`
+	Text     string                 `json:"text"`
+	Entities map[string]interface{} `json:"entities"`
+}
 
 func handleVoice(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	c := v.OpusRecv
 	files := make(map[uint32]media.Writer)
 	stop := make(chan bool)
+
+	closeFiles := false
+
 	go func() {
 		for {
-			time.Sleep(3 * time.Second)
-
+			time.Sleep(5 * time.Second)
 			stop <- true
 		}
 	}()
 
 	for p := range c {
-		file, ok := files[p.SSRC]
-		if !ok {
-			var err error
-			file, err = oggwriter.New(fmt.Sprintf("%d.ogg", p.SSRC), 48000, 1)
-			if err != nil {
-				fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
-				return
-			}
-			files[p.SSRC] = file
-		}
-		// Construct pion RTP packet from DiscordGo's type.
-		rtp := createPionRTPPacket(p)
-		
-		err := file.WriteRTP(rtp)
-		if err != nil {
-			fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
+		select {
+			case <- stop:
+				fmt.Println("break")
+				closeFiles = true
+				break
+			default:
+				file, ok := files[p.SSRC]
+				if !ok {
+					var err error
+					file, err = oggwriter.New(fmt.Sprintf("%d.ogg", p.SSRC), 48000, 1)
+					if err != nil {
+						fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
+						return
+					}
+					files[p.SSRC] = file
+				}
+				// Construct pion RTP packet from DiscordGo's type.
+				rtp := createPionRTPPacket(p)
+				
+				err := file.WriteRTP(rtp)
+				if err != nil {
+					fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
+				}			
 		}
 
-		if v, ok := <- stop; v && ok {
-			messages <- p.SSRC
+		if closeFiles == true {
+			// Once we made it here, we're done listening for packets. Close all files
+			fmt.Println("closing files...")
+			for k, f := range files {
+				err := f.Close()
+				if err != nil {
+					fmt.Println("what's this", err)
+				}
+				messages <- k
+			}	
+			// re-init the files?
+			files = make(map[uint32]media.Writer)
+			closeFiles = false
 		}
-		println("this often")
 	}
-	// Once we made it here, we're done listening for packets. Close all files
-	for _, f := range files {
-		f.Close()
-	}	
-	wg.Done()
+
+
+
+
 }
 
-func botResponse(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {
+func customWitAiPostGetText(filename string) string {
+	file, err := os.ReadFile(filename)
+	if err != nil {
+		fmt.Println("can't open file:" ,err)
+	}
+	body := bytes.NewBuffer(file)
+	req, err := http.NewRequest("POST", "https://api.wit.ai/speech?q=", body)
+	if err != nil {
+		fmt.Println(err)
+	}
+	
+	headerAuth := fmt.Sprintf("Bearer %s", witAiToken)
+	headerAccept := fmt.Sprintf("application/vnd.wit.%s+json", "20170307")
+	contentType := "audio/ogg"
+	
+	req.Header.Set("Authorization", headerAuth)
+	req.Header.Set("Accept", headerAccept)
+	req.Header.Set("Content-Type", contentType)
+
+	httpClient := &http.Client{
+		Timeout: time.Second * 10,
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		defer resp.Body.Close()
+
+		// var e *errorResp
+		// decoder := json.NewDecoder(resp.Body)
+		// err = decoder.Decode(&e)
+		// if err != nil {
+		// 	fmt.Println(fmt.Errorf("unable to decode error message: %s", err.Error()))
+		// }
+
+		// // Wit.ai errors sometimes have "error", sometimes "body" message
+		// if len(e.Error) > 0 {
+		// 	fmt.Println(fmt.Errorf("unable to make a request. error: %s", e.Error))
+		// }
+
+		// if len(e.Body) > 0 {
+		// 	fmt.Println(fmt.Errorf("unable to make a request. error: %s", e.Body))
+		// }
+	}
+
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	text := string(bytes)
+	fmt.Println(text)
+	var msgResponse MessageResponse
+	json.Unmarshal([]byte(text), &msgResponse)
+	return msgResponse.Text
+}
+
+// NOTE: wit.ai doesn't support stereo sound for now
+// (https://wit.ai/docs/http/20160516#post--speech-link)
+func oggToMp3(oggFilepath string) (mp3Filepath string, err error) {
+	mp3Filepath = fmt.Sprintf("%s.mp3", oggFilepath)
+
+	// $ ffmpeg -i input.ogg -ac 1 output.mp3
+	params := []string{"-i", oggFilepath, "-ac", "1", mp3Filepath}
+	cmd := exec.Command("ffmpeg", params...)
+
+	if _, err = cmd.CombinedOutput(); err != nil {
+		mp3Filepath = ""
+	}
+
+	return mp3Filepath, err
+}
+
+func botResponse(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {	
+	defer wg.Done()
+
 	for ssrc := range messages {
 		// get input files and then use witai to get utterance
-		file, err := os.Open(fmt.Sprintf("%d.ogg", ssrc))
-		if err != nil {
-			fmt.Println("can't open file:" ,err)
-		}
-		// send to wit AI to parse
-		speech := witai.Speech{File: file, ContentType: "audio/ogg"}
-		msg, err := witAiClient.Speech(&witai.MessageRequest{Speech: &speech})
-		if err != nil {
-			fmt.Println("can't send to witAi:", err)
-		}
-		fmt.Println("output: ",msg.Text, msg)
+		fmt.Println(ssrc)
+		ogg_filename := fmt.Sprintf("%d.ogg", ssrc)
+		// mp3_filename, err := oggToMp3(ogg_filename)
+		// if err != nil  {
+		// 	fmt.Println("mp3 conv err:", err)
+		// }
+		//mp3_filename := fmt.Sprintf("%d.mp3", ssrc)
+
+		output := customWitAiPostGetText(ogg_filename)
+		fmt.Println("resp:", output)
+		// file, err := os.Open(fmt.Sprintf("%d.ogg", ssrc))
+		// if err != nil {
+		// 	fmt.Println("can't open file:" ,err)
+		// }
+		// // send to wit AI to parse
+		// speech := witai.Speech{File: file, ContentType: "audio/ogg"}
+		// msg, err := witAiClient.Speech(&witai.MessageRequest{Speech: &speech})
+		// if err != nil {
+		// 	fmt.Println("can't send to witAi:", err)
+		// }
+		// fmt.Println("output: ",msg.Text, msg)
 	
 		// temp debug code
 		rand.Seed(time.Now().Unix())
@@ -279,7 +396,6 @@ func botResponse(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.Wa
 		stop := make(chan bool)
 		PlayAudioFile(v, outputText + ".mp3",  stop)
 	}
-	wg.Done()
 }
 
 func getVoiceMP3(text string) {
@@ -318,8 +434,8 @@ func getVoiceForText(text string) ([]byte, error) {
 
 func main() {
 	err := godotenv.Load(".env")
-	botToken := os.Getenv("DISCORD_BOT_TOKEN")
-	witAiToken := os.Getenv("WIT_AI_TOKEN")
+	botToken = os.Getenv("DISCORD_BOT_TOKEN")
+	witAiToken = os.Getenv("WIT_AI_TOKEN")
 
 	s, err := discordgo.New("Bot "+ botToken);
 	if err != nil {
@@ -347,8 +463,8 @@ func main() {
 		return
 	}
 
-	defer v.Close()
-	defer close(v.OpusRecv)
+	//defer v.Close()
+	//defer close(v.OpusRecv)
 
 	messages := make(chan uint32) // of p.SSRC
 

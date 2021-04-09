@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/go-audio/audio"
@@ -24,6 +27,22 @@ type MessageResponse struct {
 	ID       string                 `json:"msg_id"`
 	Text     string                 `json:"_text"`
 	Entities map[string]interface{} `json:"entities"`
+}
+
+// NOTE: wit.ai doesn't support stereo sound for now
+// (https://wit.ai/docs/http/20160516#post--speech-link)
+func oggToMp3(oggFilepath string) (mp3Filepath string, err error) {
+	mp3Filepath = fmt.Sprintf("%s.mp3", oggFilepath)
+
+	// $ ffmpeg -i input.ogg -ac 1 output.mp3
+	params := []string{"-i", oggFilepath, "-ac", "1", mp3Filepath}
+	cmd := exec.Command("ffmpeg", params...)
+
+	if _, err = cmd.CombinedOutput(); err != nil {
+		mp3Filepath = ""
+	}
+
+	return mp3Filepath, err
 }
 
 
@@ -66,21 +85,21 @@ func main() {
 
 
 
-	file, err := os.ReadFile("hohoho.ogg")
+	
+	// // // bypass witgo library since not working properly
+	file, err := os.ReadFile("test.mp3")
 	if err != nil {
 		fmt.Println("can't open file:" ,err)
 	}
-	
-	// // bypass witgo library since not working properly
 	body := bytes.NewBuffer(file)
-	req, err := http.NewRequest("POST", "https://api.wit.ai/speech", body)
+	req, err := http.NewRequest("POST", "https://api.wit.ai/speech?q=", body)
 	if err != nil {
 		fmt.Println(err)
 	}
 	
 	headerAuth := fmt.Sprintf("Bearer %s", witAiToken)
 	headerAccept := fmt.Sprintf("application/vnd.wit.%s+json", "20170307")
-	contentType := "audio/ogg"
+	contentType := "audio/mpeg3"
 	
 	req.Header.Set("Authorization", headerAuth)
 	req.Header.Set("Accept", headerAccept)
@@ -114,25 +133,38 @@ func main() {
 		}
 	}
 
-	var msgResp *MessageResponse
-	decoder := json.NewDecoder(resp.Body)
-	err = decoder.Decode(&msgResp)
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}
 
-	//fmt.Println("owo is: ", gencurl.FromRequest(req))
-	fmt.Println(msgResp, msgResp.Text, err)
+	fmt.Println(string(bytes))
+
+	// var msgResp *MessageResponse
+	// decoder := json.NewDecoder(resp.Body)
+	// err = decoder.Decode(&msgResp)
+
+	// //fmt.Println("owo is: ", gencurl.FromRequest(req))
+	// fmt.Println(msgResp, msgResp.Text, err)
+
+
+
 
 
 	//send to wit AI to parse	
-	// file, err := os.Open("570650.ogg")
-	
-	// speech := witai.Speech{File: file, ContentType: "audio/ogg",}
+	//file, err := os.Open("test.mp3")
+	// file, err := ioutil.ReadFile("test.mp3")
+	// reader := bytes.NewReader(file)
+	// speech := witai.Speech{File: reader, ContentType: "audio/mpeg3",}
 	// msg_request := witai.MessageRequest{ Speech: &speech,}
 	// msg, err := witAiClient.Speech(&msg_request)
-	// file.Close()
+	// //file.Close()
 	// if err != nil {
 	// 	fmt.Println("can't send to witAi:", err)
 	// }
 	// fmt.Println(msg, msg.Text)
+
+
 }
 
 func newAudioIntBuffer(r io.Reader) (*audio.IntBuffer, error) {
