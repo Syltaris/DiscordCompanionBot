@@ -15,4 +15,5 @@ require (
 	github.com/wit-ai/wit-go v1.0.13 // indirect
 	golang.org/x/text v0.3.6 // indirect
 	gopkg.in/hraban/opus.v2 v2.0.0-20201025103112-d779bb1cc5a2 // indirect
+	layeh.com/gopus v0.0.0-20161224163843-0ebf989153aa // indirect
 )
