@@ -44,58 +44,63 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 
 	c := v.OpusRecv
 	files := make(map[uint32]media.Writer)
-	stop := make(chan bool)
-
-	closeFiles := false
-
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			stop <- true
-		}
-	}()
-
+	lastWrittenTimestamps := make(map[uint32]uint32) // ssrc : timestamp
+	rtpChannels := make(map[uint32]chan rtp.Packet)
+	// receives p packets if incoming
+	// should trigger a listen for each start of packet?
 	for p := range c {
-		select {
-			case <- stop:
-				fmt.Println("break")
-				closeFiles = true
-				break
-			default:
-				file, ok := files[p.SSRC]
-				if !ok {
-					var err error
-					file, err = oggwriter.New(fmt.Sprintf("userAudio/%d.ogg", p.SSRC), 48000, 2)
-					if err != nil {
-						fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
-						return
-					}
-					files[p.SSRC] = file
-				}
-				// Construct pion RTP packet from DiscordGo's type.
-				rtp := createPionRTPPacket(p)
-				
-				err := file.WriteRTP(rtp)
-				if err != nil {
-					fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
-				}			
-		}
+		// process into rtp packets and send to channel
+		// if no channel, create 1
+		rtpChannel, ok := rtpChannels[p.SSRC]
+		fmt.Println(p.SSRC, ok)
+		if !ok {
+			rtpChannels[p.SSRC] = make(chan rtp.Packet)
+			rtpChannel = rtpChannels[p.SSRC]
 
-		if closeFiles == true {
-			// Once we made it here, we're done listening for packets. Close all files
-			fmt.Println("closing files...")
-			for k, f := range files {
-				err := f.Close()
-				if err != nil {
-					fmt.Println("what's this", err)
+			// spawn file processor here?
+			go func(ssrc uint32) {
+				for {
+					select {						
+					case rtpPacket, ok := <- rtpChannel:
+						fmt.Println(rtpPacket.SSRC, rtpPacket.Timestamp)
+						lastWrittenTimestamps[p.SSRC] = p.Timestamp // no mutex...ok?
+						file, ok := files[rtpPacket.SSRC]
+						if !ok { // indicates a new file to write for interval for
+							var err error
+							file, err = oggwriter.New(fmt.Sprintf("userAudio/%d.ogg", rtpPacket.SSRC), 48000, 2)
+							if err != nil {
+								fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
+								return
+							}
+							files[rtpPacket.SSRC] = file
+						}
+						err := file.WriteRTP(&rtpPacket)
+						if err != nil {
+							fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
+						}	
+					default: // check timeouts
+						ts := lastWrittenTimestamps[ssrc]
+						now := p.Timestamp 
+						if now != ts {
+
+							fmt.Println("does this even work:", now, ts)
+						}
+						if now - ts > 1000000 {
+							fmt.Println("close file")
+							file, _ := files[ssrc]
+							file.Close()
+							delete(files, ssrc)
+							messages <- ssrc
+							time.Sleep(3 * time.Second) // hopefully enough for receiver to process and reply
+						}
+					}
 				}
-				messages <- k
-			}	
-			// re-init the files?
-			files = make(map[uint32]media.Writer)
-			closeFiles = false
+			}(p.SSRC)
 		}
+		rtpPacket := createPionRTPPacket(p)
+		rtpChannel <- *rtpPacket
 	}
+	fmt.Println("wait where are you going")
 }
 
 
@@ -115,11 +120,11 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		analysis := sentimentModel.SentimentAnalysis(outputText, sentiment.English)
 		fmt.Println("score:", analysis.Score, outputText)
 		
-		lib.GetMP3ForText(outputText)
 		
 		stop := make(chan bool)
 		if echoMode {
-			lib.PlayAudioFile(v, "cache/" +outputText + ".mp3",  stop)
+			lib.GetMP3ForText(outputText)
+			lib.PlayAudioFile(v, "cache/" + outputText + ".mp3",  stop)
 		} else {
 			if analysis.Score == 1{
 				// play congrats sound
@@ -127,7 +132,6 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 				lib.PlayAudioFile(v, "cache/wow awesome berry good job.mp3",  stop)				
 			} else {
 				// play oh noes sound
-				// play congrats sound
 				lib.GetMP3ForText("oh noes")
 				lib.PlayAudioFile(v, "cache/oh noes.mp3",  stop)
 			}
@@ -156,6 +160,7 @@ func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		go voiceEchoEventLoop(guildId, channelId, echoMode)		
 	}
 }
+
 
 func voiceEchoEventLoop(guildId string, channelId string, echoMode bool) {
 	v, err := s.ChannelVoiceJoin(guildId, channelId, false, false);
@@ -186,8 +191,8 @@ func main() {
 	defer s.Close()
 
 	// configure listener's tracked intents?
+	s.Identify.Intents = discordgo.IntentsGuildVoiceStates | discordgo.IntentsGuildMessages 
 	s.AddHandler(eventHandler)
-	s.Identify.Intents = discordgo.IntentsGuildVoiceStates | discordgo.IntentsGuildMessages
 
 	err = s.Open()
 	if err != nil {
