@@ -226,7 +226,7 @@ func handleVoice(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.Wa
 				file, ok := files[p.SSRC]
 				if !ok {
 					var err error
-					file, err = oggwriter.New(fmt.Sprintf("%d.ogg", p.SSRC), 48000, 1)
+					file, err = oggwriter.New(fmt.Sprintf("%d.ogg", p.SSRC), 48000, 2)
 					if err != nil {
 						fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
 						return
@@ -276,7 +276,7 @@ func customWitAiPostGetText(filename string) string {
 	
 	headerAuth := fmt.Sprintf("Bearer %s", witAiToken)
 	headerAccept := fmt.Sprintf("application/vnd.wit.%s+json", "20170307")
-	contentType := "audio/ogg"
+	contentType := "audio/mpeg3"
 	
 	req.Header.Set("Authorization", headerAuth)
 	req.Header.Set("Accept", headerAccept)
@@ -328,7 +328,7 @@ func oggToMp3(oggFilepath string) (mp3Filepath string, err error) {
 	mp3Filepath = fmt.Sprintf("%s.mp3", oggFilepath)
 
 	// $ ffmpeg -i input.ogg -ac 1 output.mp3
-	params := []string{"-i", oggFilepath, "-ac", "1", mp3Filepath}
+	params := []string{"-i", oggFilepath,"-y", mp3Filepath}
 	cmd := exec.Command("ffmpeg", params...)
 
 	if _, err = cmd.CombinedOutput(); err != nil {
@@ -345,13 +345,13 @@ func botResponse(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.Wa
 		// get input files and then use witai to get utterance
 		fmt.Println(ssrc)
 		ogg_filename := fmt.Sprintf("%d.ogg", ssrc)
-		// mp3_filename, err := oggToMp3(ogg_filename)
-		// if err != nil  {
-		// 	fmt.Println("mp3 conv err:", err)
-		// }
+		mp3_filename, err := oggToMp3(ogg_filename)
+		if err != nil  {
+			fmt.Println("mp3 conv err:", err)
+		}
 		//mp3_filename := fmt.Sprintf("%d.mp3", ssrc)
 
-		output := customWitAiPostGetText(ogg_filename)
+		output := customWitAiPostGetText(mp3_filename)
 		fmt.Println("resp:", output)
 		// file, err := os.Open(fmt.Sprintf("%d.ogg", ssrc))
 		// if err != nil {
