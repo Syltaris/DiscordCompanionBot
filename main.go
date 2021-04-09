@@ -22,6 +22,7 @@ var guildId = "829599334127501312"
 var channelId = "829599334127501316"
 
 var sentimentModel sentiment.Models
+var s *discordgo.Session
 
 
 func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
@@ -98,10 +99,7 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 }
 
 
-
-
-
-func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {	
+func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool) {	
 	defer wg.Done()
 
 	for ssrc := range messages {
@@ -118,23 +116,69 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		fmt.Println("score:", analysis.Score, outputText)
 		
 		lib.GetMP3ForText(outputText)
-	
-		if analysis.Score == 1{
-			// play congrats sound
-			
-		} else {
-			// play oh noes sound
-		}
+		
 		stop := make(chan bool)
-		lib.PlayAudioFile(v, outputText + ".mp3",  stop)
+		if echoMode {
+			lib.PlayAudioFile(v, "cache/" +outputText + ".mp3",  stop)
+		} else {
+			if analysis.Score == 1{
+				// play congrats sound
+				lib.GetMP3ForText("wow awesome berry good job")
+				lib.PlayAudioFile(v, "cache/wow awesome berry good job.mp3",  stop)				
+			} else {
+				// play oh noes sound
+				// play congrats sound
+				lib.GetMP3ForText("oh noes")
+				lib.PlayAudioFile(v, "cache/oh noes.mp3",  stop)
+			}
+		}
 	}
 }
 
+func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
+	fmt.Println(m.Author.ID, s.State.User.ID, m.Content, m.ChannelID)
+	if m.Content == "<@!" + s.State.User.ID + "> join me" || m.Content == "<@!" + s.State.User.ID + "> repeat after me"{
+		guildId := m.GuildID
+		channels, err := s.GuildChannels(guildId)//which voice channel the user is on? or just any 1st voice channel of guild
+		var channelId string
+		for _, channel := range channels {
+			if channel.Type == discordgo.ChannelTypeGuildVoice {
+				channelId = channel.ID
+				break
+			}
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
 
+		// hacky
+		echoMode := m.Content != "<@!" + s.State.User.ID + "> join me"
+		go voiceEchoEventLoop(guildId, channelId, echoMode)		
+	}
+}
+
+func voiceEchoEventLoop(guildId string, channelId string, echoMode bool) {
+	v, err := s.ChannelVoiceJoin(guildId, channelId, false, false);
+	if err != nil {
+		fmt.Println("can't join guild/channel:", err)
+		return
+	}
+
+	messages := make(chan uint32) // of p.SSRC
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	go HandleVoiceReceive(v, messages, &wg)
+	go HandleBotReply(v, messages, &wg, echoMode)
+	wg.Wait()
+	v.Close()
+	close(v.OpusRecv)
+	close(messages)
+}
 
 func main() {
 	err := godotenv.Load(".env")
-	s, err := discordgo.New("Bot "+ os.Getenv("DISCORD_BOT_TOKEN"));
+	s, err = discordgo.New("Bot "+ os.Getenv("DISCORD_BOT_TOKEN"));
 	if err != nil {
 		fmt.Println("can't init Discord sesh:", err)
 		return
@@ -142,19 +186,12 @@ func main() {
 	defer s.Close()
 
 	// configure listener's tracked intents?
-	s.Identify.Intents = discordgo.IntentsGuildVoiceStates
+	s.AddHandler(eventHandler)
+	s.Identify.Intents = discordgo.IntentsGuildVoiceStates | discordgo.IntentsGuildMessages
 
 	err = s.Open()
 	if err != nil {
 		fmt.Println("can't open conn:", err)
-		return
-	}
-
-	// should only do this on slash command
-	// need to dynamically get gid and cid
-	v, err := s.ChannelVoiceJoin(guildId, channelId, false, false);
-	if err != nil {
-		fmt.Println("can't join guild/channel:", err)
 		return
 	}
 
@@ -164,21 +201,8 @@ func main() {
 		panic(err) 
 	} 
 
-	messages := make(chan uint32) // of p.SSRC
-
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-	go HandleVoiceReceive(v, messages, &wg)
-	go HandleBotReply(v, messages, &wg)
-
-
 	stop := make(chan os.Signal)
 	signal.Notify(stop, os.Interrupt)
 	<-stop
 	log.Println("Gracefully shutdowning")
-	v.Close()
-	close(v.OpusRecv)
-	close(messages)
-
-	wg.Wait()
 }
