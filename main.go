@@ -190,9 +190,18 @@ func PlayAudioFile(v *discordgo.VoiceConnection, filename string, stop <-chan bo
 }
 
 
-func handleVoice(v *discordgo.VoiceConnection, wg *sync.WaitGroup) {
+func handleVoice(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {
 	c := v.OpusRecv
 	files := make(map[uint32]media.Writer)
+	stop := make(chan bool)
+	go func() {
+		for {
+			time.Sleep(3 * time.Second)
+
+			stop <- true
+		}
+	}()
+
 	for p := range c {
 		file, ok := files[p.SSRC]
 		if !ok {
@@ -212,79 +221,68 @@ func handleVoice(v *discordgo.VoiceConnection, wg *sync.WaitGroup) {
 			fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", p.SSRC, err)
 		}
 
+		if v, ok := <- stop; v && ok {
+			messages <- p.SSRC
+		}
+		println("this often")
 	}
 	// Once we made it here, we're done listening for packets. Close all files
 	for _, f := range files {
 		f.Close()
 	}	
-	
-	//
-	file, err := os.Open("593398.ogg")
-	if err != nil {
-		fmt.Println("can't open file:" ,err)
-	}
-	// send to wit AI to parse
-	speech := witai.Speech{File: file, ContentType: "audio/ogg"}
-	msg, err := witAiClient.Speech(&witai.MessageRequest{Speech: &speech})
-	if err != nil {
-		fmt.Println("can't send to witAi:", err)
-	}
-	fmt.Println("output: ",msg.Text, msg)
-
-	// temp debug code
-	rand.Seed(time.Now().Unix())
-	choices := []string{
-		"get rekt noob",
-		"wow yes i did it",
-		"totally nice job",
-		"wow you suck eggs",
-		"eat my shorts",
-	}
-	outputText := choices[rand.Int() % len(choices)]
-
-	// suppose we got the output here, feed it to sentiment engine and see result
-	model, err := sentiment.Restore() 
-		if err != nil {  
-		panic(err) 
-	} 
-	var analysis *sentiment.Analysis
-	analysis = model.SentimentAnalysis(outputText, sentiment.English)
-	fmt.Println("score:", analysis.Score, outputText)
-	bytes, err := getVoiceForText("test")
-	v.Speaking(true)
-
-	v.OpusSend <- bytes
-	if analysis.Score == 1{
-		// play congrats sound
-		
-	} else {
-		// play oh noes sound
-	}
-
-	v.Speaking(false)
-
 	wg.Done()
 }
 
-func getVoiceForText(text string) ([]byte, error) {
-	url := fmt.Sprintf("https://texttospeech.responsivevoice.org/v1/text:synthesize?text=%s&lang=vi&engine=g1&name=&pitch=0.5&rate=0.5&volume=1&key=WfWmvaX0&gender=female", strings.Replace(text, " ", "+", -1 ))
-	resp, err := http.Get(url)
-	if err != nil {
-		fmt.Println("fetch err:", err)
-		return nil, err
-	}
-	defer resp.Body.Close()
+func botResponse(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {
+	for ssrc := range messages {
+		// get input files and then use witai to get utterance
+		file, err := os.Open(fmt.Sprintf("%d.ogg", ssrc))
+		if err != nil {
+			fmt.Println("can't open file:" ,err)
+		}
+		// send to wit AI to parse
+		speech := witai.Speech{File: file, ContentType: "audio/ogg"}
+		msg, err := witAiClient.Speech(&witai.MessageRequest{Speech: &speech})
+		if err != nil {
+			fmt.Println("can't send to witAi:", err)
+		}
+		fmt.Println("output: ",msg.Text, msg)
 	
-	bytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalln(err)
-	}
+		// temp debug code
+		rand.Seed(time.Now().Unix())
+		choices := []string{
+			"get rekt noob",
+			"wow yes i did it",
+			"totally nice job",
+			"wow you suck eggs",
+			"eat my shorts",
+		}
+		outputText := choices[rand.Int() % len(choices)]
 	
-	return bytes, nil
+		// suppose we got the output here, feed it to sentiment engine and see result
+		model, err := sentiment.Restore() 
+			if err != nil {  
+			panic(err) 
+		} 
+		var analysis *sentiment.Analysis
+		analysis = model.SentimentAnalysis(outputText, sentiment.English)
+		fmt.Println("score:", analysis.Score, outputText)
+		
+		getVoiceMP3(outputText)
+	
+		if analysis.Score == 1{
+			// play congrats sound
+			
+		} else {
+			// play oh noes sound
+		}
+		stop := make(chan bool)
+		PlayAudioFile(v, outputText + ".mp3",  stop)
+	}
+	wg.Done()
 }
 
-func main() {
-	text := "get rekt noobies"
+func getVoiceMP3(text string) {
 	// if voice file exists, don't need to fetch again
 	if _, err := os.Stat(text + ".mp3"); os.IsNotExist(err) {
 		fmt.Println("file not in cache, proceed to fetch")
@@ -300,7 +298,25 @@ func main() {
 	}
 	fmt.Println("seems exist or created")
 	return
+}
 
+func getVoiceForText(text string) ([]byte, error) {
+	url := fmt.Sprintf("https://texttospeech.responsivevoice.org/v1/text:synthesize?text=%s&lang=vi&engine=g1&name=&pitch=0.5&rate=0.5&volume=1&key=WfWmvaX0&gender=female", strings.Replace(text, " ", "+", -1 ))
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Println("fetch err:", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalln(err)
+	}	
+	return bytes, nil
+}
+
+func main() {
 	err := godotenv.Load(".env")
 	botToken := os.Getenv("DISCORD_BOT_TOKEN")
 	witAiToken := os.Getenv("WIT_AI_TOKEN")
@@ -331,14 +347,15 @@ func main() {
 		return
 	}
 
-	wg := sync.WaitGroup{}
+	defer v.Close()
+	defer close(v.OpusRecv)
 
-	wg.Add(1)
-	go func() {
-		time.Sleep(3 * time.Second)
-		close(v.OpusRecv)
-		v.Close()
-	}()
-	handleVoice(v, &wg)
+	messages := make(chan uint32) // of p.SSRC
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	go handleVoice(v, messages, &wg)
+	go botResponse(v, messages, &wg)
+
 	wg.Wait()
 }
