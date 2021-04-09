@@ -13,11 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"layeh.com/gopus"
+	"gopkg.in/hraban/opus.v2"
 )
 
 // OnError gets called by dgvoice when an error is encountered.
@@ -37,14 +36,9 @@ var OnError = func(str string, err error) {
 // These below values seem to provide the best overall performance
 const (
 	channels  int = 2                   // 1 for mono, 2 for stereo
-	frameRate int = 48000               // audio sampling rate
+	sampleRate int = 48000               // audio sampling rate
 	frameSize int = 960                 // uint16 size of each audio frame
 	maxBytes  int = (frameSize * 2) * 2 // max size of opus data
-)
-var (
-	speakers    map[uint32]*gopus.Decoder
-	opusEncoder *gopus.Encoder
-	mu          sync.Mutex
 )
 // SendPCM will receive on the provied channel encode
 // received PCM data into Opus then send that to Discordgo
@@ -52,18 +46,14 @@ func SendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 	if pcm == nil {
 		return
 	}
-
 	var err error
 
-	opusEncoder, err = gopus.NewEncoder(frameRate, channels, gopus.Audio)
-
+	opusEncoder, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
 	if err != nil {
 		OnError("NewEncoder Error", err)
 		return
 	}
-
 	for {
-
 		// read pcm from chan, exit if channel is closed.
 		recv, ok := <-pcm
 		if !ok {
@@ -71,20 +61,29 @@ func SendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 			return
 		}
 
+		// frameSize := len(pcm) // must be interleaved if stereo
+		// frameSizeMs := float32(frameSize) / float32(channels) * 1000.0 / float32(sampleRate)
+		// switch frameSizeMs {
+		// case 2.5, 5, 10, 20, 40, 60:
+		// 	// Good.
+		// default:
+		// 	fmt.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
+		// 	return 
+		// }
 		// try encoding pcm frame with Opus
-		opus, err := opusEncoder.Encode(recv, frameSize, maxBytes)
+		buf := make([]byte, maxBytes)
+		n, err := opusEncoder.Encode(recv, buf)
 		if err != nil {
 			OnError("Encoding Error", err)
 			return
 		}
-
 		if v.Ready == false || v.OpusSend == nil {
 			// OnError(fmt.Sprintf("Discordgo not ready for opus packets. %+v : %+v", v.Ready, v.OpusSend), nil)
 			// Sending errors here might not be suited
 			return
 		}
 		// send encoded opus data to the sendOpus channel
-		v.OpusSend <- opus
+		v.OpusSend <- buf[:n]
 	}
 }
 // PlayAudioFile will play the given filename to the already connected
@@ -93,7 +92,7 @@ func SendPCM(v *discordgo.VoiceConnection, pcm <-chan []int16) {
 func PlayAudioFile(v *discordgo.VoiceConnection, filename string, stop <-chan bool) {
 
 	// Create a shell command "object" to run.
-	run := exec.Command("ffmpeg", "-i", filename, "-f", "s16le", "-ar", strconv.Itoa(frameRate), "-ac", strconv.Itoa(channels), "pipe:1")
+	run := exec.Command("ffmpeg", "-i", filename, "-f", "s16le", "-ar", strconv.Itoa(sampleRate), "-ac", strconv.Itoa(channels), "pipe:1")
 	ffmpegout, err := run.StdoutPipe()
 	if err != nil {
 		OnError("StdoutPipe Error", err)

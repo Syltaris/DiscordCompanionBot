@@ -12,6 +12,7 @@ require (
 	github.com/pion/webrtc/v3 v3.0.20
 	golang.org/x/sys v0.0.0-20210403161142-5e06dd20ab57 // indirect
 	golang.org/x/text v0.3.6 // indirect
+	gopkg.in/hraban/opus.v2 v2.0.0-20201025103112-d779bb1cc5a2 // indirect
 )
 
 replace github.com/Syltaris/DiscordCompanionBot/lib => ./lib

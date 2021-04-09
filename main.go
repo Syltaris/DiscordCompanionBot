@@ -52,7 +52,6 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 		// process into rtp packets and send to channel
 		// if no channel, create 1
 		rtpChannel, ok := rtpChannels[p.SSRC]
-		fmt.Println(p.SSRC, ok)
 		if !ok {
 			rtpChannels[p.SSRC] = make(chan rtp.Packet)
 			rtpChannel = rtpChannels[p.SSRC]
@@ -81,10 +80,6 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 					default: // check timeouts
 						ts := lastWrittenTimestamps[ssrc]
 						now := p.Timestamp 
-						if now != ts {
-
-							fmt.Println("does this even work:", now, ts)
-						}
 						if now - ts > 1000000 {
 							fmt.Println("close file")
 							file, _ := files[ssrc]

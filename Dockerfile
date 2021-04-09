@@ -9,9 +9,9 @@ RUN apk add build-base
 RUN apk add  --no-cache ffmpeg
 
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o dcb .
+RUN CGO_ENABLED=0 GOOS=linux go build -o dcb .
 
 FROM scratch
-COPY --from=build /dcb /dcb
+COPY --from=build /src/dcb /dcb
 #ENTRYPOINT ["./bin/app"]
-CMD ["/dcb"]
+CMD ["./dcb"]
