@@ -35,13 +35,15 @@ func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	}
 }
 
-func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup) {
+func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, speaking *bool) {
 	defer wg.Done()
 
 	c := v.OpusRecv
 	files := make(map[uint32]media.Writer)
-	lastWrittenTimestamps := make(map[uint32]uint32) // ssrc : timestamp
+	firstWrittenTimestamps := make(map[uint32]int64) // used to keep track of too long convos, early term
+	lastWrittenTimestamps := make(map[uint32]int64) // ssrc : time now unix
 	rtpChannels := make(map[uint32]chan rtp.Packet)
+
 	// receives p packets if incoming
 	// should trigger a listen for each start of packet?
 	for p := range c {
@@ -52,13 +54,23 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 			rtpChannels[p.SSRC] = make(chan rtp.Packet)
 			rtpChannel = rtpChannels[p.SSRC]
 
-			// spawn file processor here?
+			// spawn file processor here? only once when channel is created
 			go func(ssrc uint32) {
 				for {
 					select {						
 					case rtpPacket, ok := <- rtpChannel:
-						fmt.Println(rtpPacket.SSRC, rtpPacket.Timestamp)
-						lastWrittenTimestamps[p.SSRC] = p.Timestamp // no mutex...ok?
+						// need a way to stop listening while 'speaking'
+						if *speaking ==  true { // warning: speaking should be read only
+							break 
+						}
+						now := time.Now().Unix()
+						fmt.Println(rtpPacket.SSRC, rtpPacket.Timestamp, now)
+						firstTs, ok := firstWrittenTimestamps[rtpPacket.SSRC]
+						if ok && now - firstTs > 15 { // speaking too long, skip writing to file to avoid 20s limit
+							break
+						}
+
+						lastWrittenTimestamps[rtpPacket.SSRC] = now // no mutex...ok?
 						file, ok := files[rtpPacket.SSRC]
 						if !ok { // indicates a new file to write for interval for
 							var err error
@@ -68,6 +80,9 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 								return
 							}
 							files[rtpPacket.SSRC] = file
+
+							// this is also when the file is first written
+							firstWrittenTimestamps[rtpPacket.SSRC] = now
 						}
 						err := file.WriteRTP(&rtpPacket)
 						if err != nil {
@@ -75,14 +90,19 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 						}	
 					default: // check timeouts
 						ts := lastWrittenTimestamps[ssrc]
-						now := p.Timestamp 
-						if now - ts > 1000000 {
-							fmt.Println("close file")
-							file, _ := files[ssrc]
+						now := time.Now().Unix()
+						if now - ts > 2 { //  delay
+							file, ok := files[ssrc]
+							if !ok { // skip if no file, cuz convo not started
+								break
+							}
+							fmt.Println("close file:", now - ts, now, ts)
 							file.Close()
 							delete(files, ssrc)
 							messages <- ssrc
-							time.Sleep(3 * time.Second) // hopefully enough for receiver to process and reply
+							time.Sleep(3 * time.Second) // prevent writing new file before receiver can process it 
+							lastWrittenTimestamps[ssrc] = time.Now().Add(3 * time.Second).Unix() // give 3s delay to speak
+							delete(firstWrittenTimestamps, ssrc)
 						}
 					}
 				}
@@ -119,7 +139,7 @@ var negativeReplies = []string{
 }
 
 
-func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool) {	
+func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool, speaking *bool) {	
 	defer wg.Done()
 
 	for ssrc := range messages {
@@ -136,6 +156,7 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		fmt.Println("score:", analysis.Score, outputText)
 		
 		stop := make(chan bool)
+		*speaking = true
 		if echoMode {
 			filename := "cache/" + outputText + ".mp3"
 			lib.GetMP3ForText(outputText)
@@ -160,6 +181,7 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 				lib.PlayAudioFile(v, filename,  stop)
 			}
 		}
+		*speaking = false
 
 		// cleanup userAudio files once done
 		e := os.Remove(ogg_filename)
@@ -204,11 +226,13 @@ func voiceEchoEventLoop(guildId string, channelId string, echoMode bool) {
 	}
 
 	messages := make(chan uint32) // of p.SSRC
+	speaking := false
+
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
-	go HandleVoiceReceive(v, messages, &wg)
-	go HandleBotReply(v, messages, &wg, echoMode)
+	go HandleVoiceReceive(v, messages, &wg, &speaking)
+	go HandleBotReply(v, messages, &wg, echoMode, &speaking)
 	wg.Wait()
 	v.Close()
 	close(v.OpusRecv)
