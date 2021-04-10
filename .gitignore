@@ -1,0 +1,6 @@
+# audio files
+*.ogg
+*.mp3
+
+# env
+.env

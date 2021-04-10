@@ -115,11 +115,16 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		analysis := sentimentModel.SentimentAnalysis(outputText, sentiment.English)
 		fmt.Println("score:", analysis.Score, outputText)
 		
-		
 		stop := make(chan bool)
 		if echoMode {
+			filename := "cache/" + outputText + ".mp3"
 			lib.GetMP3ForText(outputText)
-			lib.PlayAudioFile(v, "cache/" + outputText + ".mp3",  stop)
+			lib.PlayAudioFile(v, filename,  stop)
+
+			e := os.Remove(filename)
+			if e!= nil {
+				fmt.Println("error removing userAudio:",err)
+			}
 		} else {
 			if analysis.Score == 1{
 				// play congrats sound
@@ -130,6 +135,16 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 				lib.GetMP3ForText("oh noes")
 				lib.PlayAudioFile(v, "cache/oh noes.mp3",  stop)
 			}
+		}
+
+		// cleanup userAudio files once done
+		e := os.Remove(ogg_filename)
+		if e!= nil {
+			fmt.Println("error removing userAudio:",err)
+		}
+		e = os.Remove(mp3_filename)
+		if e!= nil {
+			fmt.Println("error removing userAudio:",err)
 		}
 	}
 }
