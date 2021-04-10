@@ -144,6 +144,7 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 
 	for ssrc := range messages {
 		// get input files and then use witai to get utterance
+		*speaking = true
 		ogg_filename := fmt.Sprintf("userAudio/" + "%d.ogg", ssrc)
 		mp3_filename, err := lib.OggToMp3(ogg_filename)
 		if err != nil  {
@@ -156,7 +157,6 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		fmt.Println("score:", analysis.Score, outputText)
 		
 		stop := make(chan bool)
-		*speaking = true
 		if echoMode {
 			filename := "cache/" + outputText + ".mp3"
 			lib.GetMP3ForText(outputText)
@@ -181,7 +181,6 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 				lib.PlayAudioFile(v, filename,  stop)
 			}
 		}
-		*speaking = false
 
 		// cleanup userAudio files once done
 		e := os.Remove(ogg_filename)
@@ -192,6 +191,8 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		if e!= nil {
 			fmt.Println("error removing userAudio:",err)
 		}
+		*speaking = false
+
 	}
 }
 
