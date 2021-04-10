@@ -6,8 +6,10 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Syltaris/DiscordCompanionBot/lib"
 	"github.com/bwmarrin/discordgo"
@@ -211,7 +213,16 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 
 func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 	fmt.Println(m.Author.ID, s.State.User.ID, m.Content, m.ChannelID)
-	if m.Content == "<@!" + s.State.User.ID + "> join me" || m.Content == "<@!" + s.State.User.ID + "> repeat after me"{
+
+	halves := strings.Split(m.Content, ">") 
+	uid := strings.TrimFunc(halves[0], func(r rune) bool {
+		return !unicode.IsNumber(r)
+	})
+	command := strings.ToLower(strings.ReplaceAll(halves[1], " ", ""))
+	fmt.Println(uid, command)
+
+
+	if s.State.User.ID == uid && command == "joinme" || command == "repeatafterme" {
 		guildId := m.GuildID
 		channels, err := s.GuildChannels(guildId)//which voice channel the user is on? or just any 1st voice channel of guild
 		var channelId string
@@ -226,7 +237,7 @@ func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		// hacky
-		echoMode := m.Content != "<@!" + s.State.User.ID + "> join me"
+		echoMode := command == "repeatafterme"
 		go voiceEchoEventLoop(guildId, channelId, echoMode)		
 	}
 }
@@ -252,21 +263,6 @@ func voiceEchoEventLoop(guildId string, channelId string, echoMode bool) {
 	v.Disconnect()
 }
 
-func voiceStateUpdateHandler(s *discordgo.Session, m *discordgo.VoiceStateUpdate) {
-	fmt.Println(m.GuildID, m.ChannelID, m.UserID, m.VoiceState)
-
-	// if user disconnects, and bot is in channel, and bot is the only 1 in channel, leave as well
-	if m.ChannelID == "" { 
-		leftChannel, err := s.State.Channel(m.BeforeUpdate.ChannelID)
-		if err != nil {
-			fmt.Println("can't find channel:", err)
-			return
-		}
-		fmt.Println(leftChannel)
-	
-	}
-
-}
 
 func main() {
 	err := godotenv.Load(".env")
@@ -277,10 +273,10 @@ func main() {
 	}
 	defer s.Close()
 
+
 	// configure listener's tracked intents?
 	s.Identify.Intents = discordgo.IntentsGuildVoiceStates | discordgo.IntentsGuildMessages 
 	s.AddHandler(eventHandler)
-	s.AddHandler(voiceStateUpdateHandler)
 
 	err = s.Open()
 	if err != nil {
