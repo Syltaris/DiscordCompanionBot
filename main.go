@@ -20,6 +20,8 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
 )
 
+const helpText = "You wan sum help? \nType in `@CompanionBot join me` and I will respond to what you say\nType in `@CompanionBot repeat after me` and I will echo your words :)"
+
 var sentimentModel sentiment.Models
 var s *discordgo.Session
 
@@ -212,17 +214,24 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 }
 
 func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
-	fmt.Println(m.Author.ID, s.State.User.ID, m.Content, m.ChannelID)
-
+	if !strings.HasPrefix(m.Content, "<") {
+		return
+	}
+	
 	halves := strings.Split(m.Content, ">") 
 	uid := strings.TrimFunc(halves[0], func(r rune) bool {
 		return !unicode.IsNumber(r)
 	})
 	command := strings.ToLower(strings.ReplaceAll(halves[1], " ", ""))
-	fmt.Println(uid, command)
+	
+	fmt.Println(m.Author.ID, s.State.User.ID, m.Content, m.ChannelID)
+	
+	if s.State.User.ID == uid && command == "joinme" || command == "repeatafterme" || command == "help" {
+		if command == "help" {
+			s.ChannelMessageSend(m.ChannelID, helpText)
+			return 
+		}
 
-
-	if s.State.User.ID == uid && command == "joinme" || command == "repeatafterme" {
 		guildId := m.GuildID
 		channels, err := s.GuildChannels(guildId)//which voice channel the user is on? or just any 1st voice channel of guild
 		var channelId string
