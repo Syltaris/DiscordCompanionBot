@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
 	"sync"
@@ -17,13 +18,8 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media/oggwriter"
 )
 
-
-var guildId = "829599334127501312"
-var channelId = "829599334127501316"
-
 var sentimentModel sentiment.Models
 var s *discordgo.Session
-
 
 func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	return &rtp.Packet{
@@ -98,6 +94,30 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 	fmt.Println("wait where are you going")
 }
 
+var positiveReplies = []string {
+	"omegalul",
+	"that is great",
+	"bao chicka wow wow",
+	"berry good job",
+	"lol",
+	"l m eh oh",
+	"you are the best",
+	"so beautiful",
+	"good good",
+	"awesome pawsome",
+}
+
+var negativeReplies = []string{
+	"oh noes",
+	"sorry",
+	"so sad",
+	"better luck next time",
+	"oopsies",
+	"resident sleeper zz",
+	"there there",
+	"pe pehands",
+}
+
 
 func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool) {	
 	defer wg.Done()
@@ -128,12 +148,16 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		} else {
 			if analysis.Score == 1{
 				// play congrats sound
-				lib.GetMP3ForText("wow awesome berry good job")
-				lib.PlayAudioFile(v, "cache/wow awesome berry good job.mp3",  stop)				
+				posText := positiveReplies[rand.Intn( len(positiveReplies))]
+				filename := "cache/" + posText + ".mp3"
+				lib.GetMP3ForText(posText)
+				lib.PlayAudioFile(v, filename,  stop)				
 			} else {
 				// play oh noes sound
-				lib.GetMP3ForText("oh noes")
-				lib.PlayAudioFile(v, "cache/oh noes.mp3",  stop)
+				negText := negativeReplies[rand.Intn( len(negativeReplies))]
+				filename := "cache/" + negText + ".mp3"
+				lib.GetMP3ForText(negText)
+				lib.PlayAudioFile(v, filename,  stop)
 			}
 		}
 
