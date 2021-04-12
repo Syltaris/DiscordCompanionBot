@@ -45,7 +45,6 @@ func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan 
 
 	for {			
 		now := time.Now().Unix()
-
 		select {													
 		case rtpPacket, _ := <- rtpChannel:
 			if firstWrittenTimestamp != 0 && now - firstWrittenTimestamp > 15 { // ! init && speaking too long, so skip to write to file and avoid 20s limit
@@ -119,7 +118,7 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 					fmt.Println("closing from inactivity...")
 					fetchAndCacheAndPlayMP3(v, "bye bye")
 					close(messages)
-					return // does this kill all spawned goroutines????
+					return 
 				}
 			}
 		}
@@ -243,6 +242,15 @@ func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 				channelId = channel.ID
 				break
 			}
+
+			// check if bot alr in channel, if so don't open another 
+			currentVcs, exist := s.VoiceConnections[guildId]
+			if exist {
+				fmt.Println("error: alr have active voice connection")
+				return
+			}
+
+			fmt.Println(currentVcs)
 		}
 		if err != nil {
 			fmt.Println(err)
