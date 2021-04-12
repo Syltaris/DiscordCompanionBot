@@ -72,7 +72,7 @@ func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan 
 				fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
 			}	
 		default: // check timeouts
-			if now - lastWrittenTimestamp > 2 { //  delay								
+			if now - lastWrittenTimestamp > 1 { //  delay								
 				if file == nil { // skip if no file, cuz convo not started
 					break
 				}

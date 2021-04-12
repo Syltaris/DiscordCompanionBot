@@ -26,7 +26,15 @@
 # Choose any golang image, just make sure it doesn't have -onbuild
 FROM golang:1.16.3
 
-RUN apt-get update && apt-get -y install libopus-dev libopusfile-dev ffmpeg
+RUN apt-get update && apt-get -y install libopus-dev libopusfile-dev ca-certificates curl bash  git xz-utils
+
+# custom golang?
+WORKDIR /tmp
+RUN curl -L -O https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz
+RUN tar -xf ffmpeg-git-amd64-static.tar.xz && \
+      cd ff* && mv ff* /usr/local/bin
+
+WORKDIR /
 
 # Everything below is copied manually from the official -onbuild image,
 # with the ONBUILD keywords removed.
