@@ -177,7 +177,8 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan string, wg *sync
 		fmt.Println("score:", analysis.Score, outputText)
 
 		if outputText == "" { // unknown prediction
-			fetchAndCacheAndPlayMP3(v, "sorry ai do not understand")
+			//fetchAndCacheAndPlayMP3(v, "sorry ai do not understand")
+			// just skip
 		} else {
 			if echoMode {
 				filename := "cache/" + outputText + ".mp3" // warning: this is broken from fetchandplaymp3
