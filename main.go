@@ -39,13 +39,57 @@ func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	}
 }
 
+func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan uint32) {
+	var file media.Writer
+	var firstWrittenTimestamp, lastWrittenTimestamp int64 = 0, 0
+
+	for {			
+		now := time.Now().Unix()
+
+		select {													
+		case rtpPacket, _ := <- rtpChannel:
+			if firstWrittenTimestamp != 0 && now - firstWrittenTimestamp > 15 { // ! init && speaking too long, so skip to write to file and avoid 20s limit
+				break
+			}
+			
+			if file == nil { // indicates a new file to write for interval for
+				var err error
+				file, err = oggwriter.New(fmt.Sprintf("userAudio/%d.ogg", rtpPacket.SSRC), 48000, 2)
+				if err != nil {
+					fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
+					return
+				}
+				
+				// this is also when the file is first written
+				firstWrittenTimestamp = now
+				fmt.Println("write open:", rtpPacket.SSRC, rtpPacket.Timestamp, now)
+			}
+
+			lastWrittenTimestamp = now
+			err := file.WriteRTP(&rtpPacket)
+			if err != nil {
+				fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
+			}	
+		default: // check timeouts
+			if now - lastWrittenTimestamp > 1 { //  delay								
+				if file == nil { // skip if no file, cuz convo not started
+					break
+				}
+				fmt.Println("write close:", ssrc, lastWrittenTimestamp, now)
+				file.Close()
+				file = nil
+				messages <- ssrc
+				firstWrittenTimestamp = 0
+			}
+		}
+	}
+}
+
+// wait, am i picking up my own bot's voice packets?
 func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, speaking *bool) {
 	defer wg.Done()
 
 	c := v.OpusRecv
-	files :=  sync.Map{} //make(map[uint32]media.Writer)
-	firstWrittenTimestamps := sync.Map{}// make(map[uint32]int64) // used to keep track of too long convos, early term
-	lastWrittenTimestamps := sync.Map{} //make(map[uint32]int64) // ssrc : time now unix
 	rtpChannels := sync.Map{} // make(map[uint32]chan rtp.Packet)
 
 	lastActivityTs := time.Now().Unix()
@@ -55,77 +99,18 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 	for {
 		select {
 			case p := <- c: 
+				if *speaking ==  true { // warning: speaking should be read only
+					break // don't bother listening if bot is talking
+				}
 				lastActivityTs = time.Now().Unix()
 				// process into rtp packets and send to channel
 				// if no channel, create 1
-				rtpChannel, ok := rtpChannels.Load(p.SSRC) //rtpChannels[p.SSRC]
+				rtpChannel, ok := rtpChannels.Load(p.SSRC)
 				if !ok {
-					//rtpChannels[p.SSRC] = make(chan rtp.Packet)
-					//rtpChannel = rtpChannels[p.SSRC]
-
 					rtpChannel = make(chan rtp.Packet)
 					rtpChannels.Store(p.SSRC, rtpChannel)
-					// spawn file processor here? only once when channel is created
-					go func(ssrc uint32) {
-						for {
-							select {													
-							case rtpPacket, ok := <- rtpChannel.(chan rtp.Packet):
-								// need a way to stop listening while 'speaking'
-								if *speaking ==  true { // warning: speaking should be read only
-									break 
-								}
-								now := time.Now().Unix()
-								firstTs, ok := firstWrittenTimestamps.Load(rtpPacket.SSRC) //firstWrittenTimestamps[rtpPacket.SSRC]
-								if ok && now - firstTs.(int64) > 15 { // speaking too long, skip writing to file to avoid 20s limit
-									break
-								}
-								
-								// lastWrittenTimestamps[rtpPacket.SSRC] = now // no mutex...ok?
-								lastWrittenTimestamps.Store(rtpPacket.SSRC, now)
 
-								//file, ok := files[rtpPacket.SSRC]
-								file, ok := files.Load(rtpPacket.SSRC)
-								if !ok { // indicates a new file to write for interval for
-									var err error
-									file, err = oggwriter.New(fmt.Sprintf("userAudio/%d.ogg", rtpPacket.SSRC), 48000, 2)
-									if err != nil {
-										fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
-										return
-									}
-									//files[rtpPacket.SSRC] = file
-									files.Store(rtpPacket.SSRC, file)
-									
-									// this is also when the file is first written
-									//firstWrittenTimestamps[rtpPacket.SSRC] = now
-									firstWrittenTimestamps.Store(rtpPacket.SSRC, now)
-									fmt.Println("write open:", rtpPacket.SSRC, rtpPacket.Timestamp, now)
-								}
-								err := file.(media.Writer).WriteRTP(&rtpPacket)
-								if err != nil {
-									fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
-								}	
-							default: // check timeouts
-								ts, _ := lastWrittenTimestamps.Load(ssrc) //lastWrittenTimestamps[ssrc]
-								now := time.Now().Unix()
-								if now - ts.(int64) > 1 { //  delay								
-									//file, ok := files[ssrc]
-									file, ok := files.Load(ssrc)
-									if !ok { // skip if no file, cuz convo not started
-										break
-									}
-									fmt.Println("write close:", ssrc, ts, now)
-									file.(media.Writer).Close()
-									//delete(files, ssrc)
-									files.Delete(ssrc)
-									messages <- ssrc
-									//time.Sleep(3 * time.Second) // prevent writing new file before receiver can process it 
-									//lastWrittenTimestamps[ssrc] = time.Now().Add(3 * time.Second).Unix() // give 3s delay to speak
-									//delete(firstWrittenTimestamps, ssrc)
-									firstWrittenTimestamps.Delete(ssrc)
-								}
-							}
-						}
-					}(p.SSRC)
+					go UnpackPacketsToFile(rtpChannel.(chan rtp.Packet), p.SSRC, messages)
 				}
 				rtpPacket := createPionRTPPacket(p)
 				rtpChannel.(chan rtp.Packet) <- *rtpPacket
@@ -134,7 +119,7 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 					fmt.Println("closing from inactivity...")
 					fetchAndCacheAndPlayMP3(v, "bye bye")
 					close(messages)
-					return
+					return // does this kill all spawned goroutines????
 				}
 			}
 		}
