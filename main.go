@@ -132,8 +132,7 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 			default:
 				if time.Now().Unix() - lastActivityTs > 60 { // no activity for 1 min
 					fmt.Println("closing from inactivity...")
-					lib.GetMP3ForText("bye bye")
-					lib.PlayAudioFile(v, "cache/bye bye.mp3", make(<-chan bool))
+					fetchAndCacheAndPlayMP3(v, "bye bye")
 					close(messages)
 					return
 				}
