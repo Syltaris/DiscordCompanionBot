@@ -107,7 +107,7 @@ func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *
 							default: // check timeouts
 								ts, _ := lastWrittenTimestamps.Load(ssrc) //lastWrittenTimestamps[ssrc]
 								now := time.Now().Unix()
-								if now - ts.(int64) > 2 { //  delay								
+								if now - ts.(int64) > 1 { //  delay								
 									//file, ok := files[ssrc]
 									file, ok := files.Load(ssrc)
 									if !ok { // skip if no file, cuz convo not started
@@ -165,6 +165,15 @@ var negativeReplies = []string{
 	"pe pehands",
 }
 
+// horrible, should break this up to simpler logic
+// cache elsewhere
+func fetchAndCacheAndPlayMP3(v *discordgo.VoiceConnection, text string) {
+	stop := make(chan bool)
+	filename := "cache/" + text + ".mp3"
+	lib.GetMP3ForText(text)
+	lib.PlayAudioFile(v, filename,  stop)
+}
+
 
 func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool, speaking *bool) {	
 	defer wg.Done()
@@ -183,31 +192,30 @@ func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync
 		analysis := sentimentModel.SentimentAnalysis(outputText, sentiment.English)
 		fmt.Println("score:", analysis.Score, outputText)
 
-		stop := make(chan bool)
-		if echoMode {
-			filename := "cache/" + outputText + ".mp3"
-			lib.GetMP3ForText(outputText)
-			lib.PlayAudioFile(v, filename,  stop)
-
-			e := os.Remove(filename)
-			if e!= nil {
-				fmt.Println("error removing userAudio:",err)
-			}
+		if outputText == "" { // unknown prediction
+			fetchAndCacheAndPlayMP3(v, "sorry ai do not understand")
 		} else {
-			if analysis.Score == 1{
-				// play congrats sound
-				posText := positiveReplies[rand.Intn( len(positiveReplies))]
-				filename := "cache/" + posText + ".mp3"
-				lib.GetMP3ForText(posText)
-				lib.PlayAudioFile(v, filename,  stop)				
+			if echoMode {
+				filename := "cache/" + outputText + ".mp3" // warning: this is broken from fetchandplaymp3
+				fetchAndCacheAndPlayMP3(v, outputText)
+	
+				e := os.Remove(filename)
+				if e!= nil {
+					fmt.Println("error removing userAudio:",err)
+				}
 			} else {
-				// play oh noes sound
-				negText := negativeReplies[rand.Intn( len(negativeReplies))]
-				filename := "cache/" + negText + ".mp3"
-				lib.GetMP3ForText(negText)
-				lib.PlayAudioFile(v, filename,  stop)
+				if analysis.Score == 1{
+					// play congrats sound
+					posText := positiveReplies[rand.Intn( len(positiveReplies))]
+					fetchAndCacheAndPlayMP3(v, posText)			
+				} else {
+					// play oh noes sound
+					negText := negativeReplies[rand.Intn( len(negativeReplies))]
+					fetchAndCacheAndPlayMP3(v, negText)			
+				}
 			}
 		}
+
 
 		// cleanup userAudio files once done
 		e := os.Remove(ogg_filename)
