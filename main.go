@@ -301,7 +301,6 @@ func main() {
 	}
 	defer s.Close()
 
-
 	// configure listener's tracked intents?
 	s.Identify.Intents = discordgo.IntentsGuildVoiceStates | discordgo.IntentsGuildMessages 
 	s.AddHandler(eventHandler)
@@ -310,6 +309,12 @@ func main() {
 	if err != nil {
 		fmt.Println("can't open conn:", err)
 		return
+	}
+
+
+	err = s.UpdateGameStatus(0, "@CompanionBot help")
+	if err != nil {
+		fmt.Println("err setting presence", err)
 	}
 
 	// init sentiment model
