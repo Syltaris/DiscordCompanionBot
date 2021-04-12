@@ -39,9 +39,10 @@ func createPionRTPPacket(p *discordgo.Packet) *rtp.Packet {
 	}
 }
 
-func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan uint32) {
+func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan string) {
 	var file media.Writer
 	var firstWrittenTimestamp, lastWrittenTimestamp int64 = 0, 0
+	var filename string
 
 	for {			
 		now := time.Now().Unix()
@@ -53,7 +54,8 @@ func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan 
 			
 			if file == nil { // indicates a new file to write for interval for
 				var err error
-				file, err = oggwriter.New(fmt.Sprintf("userAudio/%d.ogg", rtpPacket.SSRC), 48000, 2)
+				filename = fmt.Sprintf("%d-%d.ogg", rtpPacket.SSRC, now)
+				file, err = oggwriter.New(fmt.Sprintf("userAudio/%s", filename), 48000, 2)
 				if err != nil {
 					fmt.Printf("failed to create file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
 					return
@@ -70,22 +72,21 @@ func UnpackPacketsToFile(rtpChannel chan rtp.Packet, ssrc uint32, messages chan 
 				fmt.Printf("failed to write to file %d.ogg, giving up on recording: %v\n", rtpPacket.SSRC, err)
 			}	
 		default: // check timeouts
-			if now - lastWrittenTimestamp > 1 { //  delay								
+			if now - lastWrittenTimestamp > 2 { //  delay								
 				if file == nil { // skip if no file, cuz convo not started
 					break
 				}
 				fmt.Println("write close:", ssrc, lastWrittenTimestamp, now)
 				file.Close()
 				file = nil
-				messages <- ssrc
+				messages <- filename
 				firstWrittenTimestamp = 0
 			}
 		}
 	}
 }
 
-// wait, am i picking up my own bot's voice packets?
-func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, speaking *bool) {
+func HandleVoiceReceive(v *discordgo.VoiceConnection, messages chan string, wg *sync.WaitGroup, speaking *bool) {
 	defer wg.Done()
 
 	c := v.OpusRecv
@@ -158,13 +159,13 @@ func fetchAndCacheAndPlayMP3(v *discordgo.VoiceConnection, text string) {
 }
 
 
-func HandleBotReply(v *discordgo.VoiceConnection, messages chan uint32, wg *sync.WaitGroup, echoMode bool, speaking *bool) {	
+func HandleBotReply(v *discordgo.VoiceConnection, messages chan string, wg *sync.WaitGroup, echoMode bool, speaking *bool) {	
 	defer wg.Done()
 
-	for ssrc := range messages {
+	for filename := range messages {
 		// get input files and then use witai to get utterance
 		*speaking = true
-		ogg_filename := fmt.Sprintf("userAudio/" + "%d.ogg", ssrc)
+		ogg_filename := fmt.Sprintf("userAudio/" + filename)
 		mp3_filename, err := lib.OggToMp3(ogg_filename)
 		if err != nil  {
 			fmt.Println("mp3 conv err:", err)
@@ -244,13 +245,12 @@ func eventHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 			}
 
 			// check if bot alr in channel, if so don't open another 
-			currentVcs, exist := s.VoiceConnections[guildId]
+			_, exist := s.VoiceConnections[guildId]
 			if exist {
 				fmt.Println("error: alr have active voice connection")
 				return
 			}
 
-			fmt.Println(currentVcs)
 		}
 		if err != nil {
 			fmt.Println(err)
@@ -271,7 +271,7 @@ func voiceEchoEventLoop(guildId string, channelId string, echoMode bool) {
 	}
 	defer v.Close()
 
-	messages := make(chan uint32) // of p.SSRC
+	messages := make(chan string) // of p.SSRC-timestamp
 	speaking := false
 
 	wg := sync.WaitGroup{}
@@ -317,6 +317,7 @@ func main() {
 
 	stop := make(chan os.Signal)
 	signal.Notify(stop, os.Interrupt)
+	signal.Notify(stop, os.Kill)
 	<-stop
 	log.Println("Gracefully shutdowning")
 }

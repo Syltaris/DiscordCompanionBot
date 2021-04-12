@@ -24,7 +24,7 @@
 # RUN go-wrapper install
 
 # Choose any golang image, just make sure it doesn't have -onbuild
-FROM golang:1.16
+FROM golang:1.16.3
 
 RUN apt-get update && apt-get -y install libopus-dev libopusfile-dev ffmpeg
 
